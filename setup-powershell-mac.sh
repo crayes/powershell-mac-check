@@ -140,26 +140,61 @@ check_modules() {
     print_header "Verificando Módulos PowerShell"
     
     MISSING_MODULES=()
+    OUTDATED_MODULES=()
     INSTALLED_MODULES=()
     
     for MODULE in "${MODULES[@]}"; do
-        # Verificar se o módulo está instalado
-        RESULT=$(pwsh -NoProfile -Command "Get-InstalledModule -Name '$MODULE' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Version" 2>/dev/null || echo "")
+        # Verificar se o módulo está instalado e obter versões
+        RESULT=$(pwsh -NoProfile -Command "
+            \$installed = Get-InstalledModule -Name '$MODULE' -ErrorAction SilentlyContinue
+            \$available = Find-Module -Name '$MODULE' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (\$installed) {
+                \$needsUpdate = \$false
+                if (\$available -and ([version]\$available.Version -gt [version]\$installed.Version)) {
+                    \$needsUpdate = \$true
+                }
+                Write-Output \"INSTALLED|\$(\$installed.Version)|\$(\$available.Version)|\$needsUpdate\"
+            } else {
+                Write-Output \"MISSING|N/A|\$(\$available.Version)|false\"
+            }
+        " 2>/dev/null || echo "ERROR|N/A|N/A|false")
         
-        if [[ -n "$RESULT" ]]; then
-            print_success "$MODULE: v$RESULT"
-            INSTALLED_MODULES+=("$MODULE")
+        STATUS=$(echo "$RESULT" | cut -d'|' -f1)
+        INSTALLED_VER=$(echo "$RESULT" | cut -d'|' -f2)
+        LATEST_VER=$(echo "$RESULT" | cut -d'|' -f3)
+        NEEDS_UPDATE=$(echo "$RESULT" | cut -d'|' -f4)
+        
+        if [[ "$STATUS" == "INSTALLED" ]]; then
+            if [[ "$NEEDS_UPDATE" == "True" ]]; then
+                print_warning "$MODULE: v$INSTALLED_VER → v$LATEST_VER disponível"
+                OUTDATED_MODULES+=("$MODULE")
+            else
+                print_success "$MODULE: v$INSTALLED_VER (atualizado)"
+                INSTALLED_MODULES+=("$MODULE")
+            fi
         else
-            print_warning "$MODULE: Não instalado"
+            print_warning "$MODULE: Não instalado (v$LATEST_VER disponível)"
             MISSING_MODULES+=("$MODULE")
         fi
     done
     
     echo ""
     echo -e "${BLUE}Resumo:${NC}"
-    echo -e "  Instalados: ${GREEN}${#INSTALLED_MODULES[@]}${NC}"
-    echo -e "  Faltando:   ${YELLOW}${#MISSING_MODULES[@]}${NC}"
+    echo -e "  Instalados e atualizados: ${GREEN}${#INSTALLED_MODULES[@]}${NC}"
+    echo -e "  Desatualizados:           ${YELLOW}${#OUTDATED_MODULES[@]}${NC}"
+    echo -e "  Faltando:                 ${YELLOW}${#MISSING_MODULES[@]}${NC}"
     
+    # Atualizar módulos desatualizados
+    if [[ ${#OUTDATED_MODULES[@]} -gt 0 ]]; then
+        echo ""
+        read -p "Deseja atualizar os módulos desatualizados? (s/n): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Ss]$ ]]; then
+            update_modules "${OUTDATED_MODULES[@]}"
+        fi
+    fi
+    
+    # Instalar módulos faltantes
     if [[ ${#MISSING_MODULES[@]} -gt 0 ]]; then
         echo ""
         read -p "Deseja instalar os módulos faltantes? (s/n): " -n 1 -r
@@ -187,6 +222,38 @@ install_modules() {
             print_success "$MODULE instalado"
         else
             print_error "Falha ao instalar $MODULE"
+        fi
+    done
+}
+
+update_modules() {
+    local MODULES_TO_UPDATE=("$@")
+    
+    print_header "Atualizando Módulos (removendo versão antiga)"
+    
+    for MODULE in "${MODULES_TO_UPDATE[@]}"; do
+        print_info "Removendo versão antiga de $MODULE..."
+        
+        # Remover todas as versões antigas
+        pwsh -NoProfile -Command "
+            \$ProgressPreference = 'SilentlyContinue'
+            Get-InstalledModule -Name '$MODULE' -AllVersions -ErrorAction SilentlyContinue | 
+                Uninstall-Module -Force -ErrorAction SilentlyContinue
+        " 2>/dev/null
+        
+        print_info "Instalando versão mais recente de $MODULE..."
+        
+        # Instalar versão mais recente
+        pwsh -NoProfile -Command "
+            \$ProgressPreference = 'SilentlyContinue'
+            Install-Module -Name '$MODULE' -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+        " 2>/dev/null
+        
+        if [[ $? -eq 0 ]]; then
+            NEW_VER=$(pwsh -NoProfile -Command "Get-InstalledModule -Name '$MODULE' | Select-Object -ExpandProperty Version" 2>/dev/null)
+            print_success "$MODULE atualizado para v$NEW_VER"
+        else
+            print_error "Falha ao atualizar $MODULE"
         fi
     done
 }
@@ -299,7 +366,7 @@ show_menu() {
     echo -e "${BLUE}"
     echo "╔════════════════════════════════════════════════════════════╗"
     echo "║     PowerShell + M365/Azure Setup Script para macOS       ║"
-    echo "║                      v1.0 - 2025                          ║"
+    echo "║                      v1.1 - 2025                          ║"
     echo "╚════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
     echo ""
