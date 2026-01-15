@@ -4,7 +4,8 @@
     Verifica e instala módulos PowerShell para M365/Azure no macOS
 .DESCRIPTION
     Script para verificar instalação do PowerShell e módulos necessários
-    para administração de Microsoft 365, Azure, Exchange, Teams e SharePoint
+    para administração de Microsoft 365, Azure, Exchange, Teams e SharePoint.
+    Quando encontra módulos desatualizados, remove a versão antiga e instala a nova.
 .AUTHOR
     Nassif - IT Admin
 .DATE
@@ -13,13 +14,15 @@
     ./Check-PowerShellSetup.ps1
     ./Check-PowerShellSetup.ps1 -InstallMissing
     ./Check-PowerShellSetup.ps1 -UpdateAll
+    ./Check-PowerShellSetup.ps1 -AutoFix
 #>
 
 [CmdletBinding()]
 param(
     [switch]$InstallMissing,
     [switch]$UpdateAll,
-    [switch]$ShowConnections
+    [switch]$ShowConnections,
+    [switch]$AutoFix  # Novo parâmetro para corrigir tudo automaticamente
 )
 
 #===============================================================================
@@ -158,12 +161,12 @@ function Install-MissingModules {
 }
 
 #===============================================================================
-# ATUALIZAÇÃO DOS MÓDULOS
+# ATUALIZAÇÃO DOS MÓDULOS (REMOVE ANTIGO + INSTALA NOVO)
 #===============================================================================
 function Update-AllModules {
     param([array]$ModuleStatus)
     
-    Write-Header "Atualizando Módulos"
+    Write-Header "Atualizando Módulos (removendo versão antiga)"
     
     $outdated = $ModuleStatus | Where-Object { $_.Installed -and $_.NeedsUpdate }
     
@@ -173,15 +176,76 @@ function Update-AllModules {
     }
     
     foreach ($module in $outdated) {
-        Write-Info "Atualizando $($module.Name) de v$($module.InstalledVersion) para v$($module.LatestVersion)..."
+        Write-Info "Atualizando $($module.Name): v$($module.InstalledVersion) → v$($module.LatestVersion)"
+        
         try {
-            Update-Module -Name $module.Name -Force -ErrorAction Stop
-            Write-Success "$($module.Name) atualizado com sucesso"
+            # Passo 1: Remover todas as versões antigas
+            Write-Info "  Removendo versão antiga..."
+            $installedModules = Get-InstalledModule -Name $module.Name -AllVersions -ErrorAction SilentlyContinue
+            
+            foreach ($mod in $installedModules) {
+                try {
+                    Uninstall-Module -Name $mod.Name -RequiredVersion $mod.Version -Force -ErrorAction Stop
+                }
+                catch {
+                    # Se falhar com RequiredVersion, tenta sem
+                    Uninstall-Module -Name $mod.Name -Force -AllVersions -ErrorAction SilentlyContinue
+                }
+            }
+            
+            Write-Success "  Versão antiga removida"
+            
+            # Passo 2: Instalar versão mais recente
+            Write-Info "  Instalando versão mais recente..."
+            Install-Module -Name $module.Name -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+            
+            # Verificar nova versão instalada
+            $newVersion = (Get-InstalledModule -Name $module.Name -ErrorAction SilentlyContinue).Version
+            Write-Success "$($module.Name) atualizado para v$newVersion"
         }
         catch {
             Write-Error "Falha ao atualizar $($module.Name): $_"
+            
+            # Tentar reinstalar se a remoção falhou
+            Write-Info "  Tentando reinstalar..."
+            try {
+                Install-Module -Name $module.Name -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+                Write-Success "  $($module.Name) reinstalado"
+            }
+            catch {
+                Write-Error "  Falha na reinstalação: $_"
+            }
         }
     }
+}
+
+#===============================================================================
+# AUTO FIX - CORRIGE TUDO AUTOMATICAMENTE
+#===============================================================================
+function Invoke-AutoFix {
+    param([array]$ModuleStatus)
+    
+    Write-Header "Auto Fix - Corrigindo todos os problemas"
+    
+    $missing = $ModuleStatus | Where-Object { -not $_.Installed }
+    $outdated = $ModuleStatus | Where-Object { $_.Installed -and $_.NeedsUpdate }
+    
+    if ($missing.Count -eq 0 -and $outdated.Count -eq 0) {
+        Write-Success "Nenhum problema encontrado! Tudo está atualizado."
+        return
+    }
+    
+    # Primeiro atualiza os desatualizados
+    if ($outdated.Count -gt 0) {
+        Update-AllModules -ModuleStatus $ModuleStatus
+    }
+    
+    # Depois instala os faltantes
+    if ($missing.Count -gt 0) {
+        Install-MissingModules -ModuleStatus $ModuleStatus
+    }
+    
+    Write-Success "Auto Fix concluído!"
 }
 
 #===============================================================================
@@ -286,10 +350,10 @@ function Show-Report {
     $outdated = ($ModuleStatus | Where-Object { $_.Installed -and $_.NeedsUpdate }).Count
     
     Write-Host ""
-    Write-Host "  Módulos instalados:   " -NoNewline
+    Write-Host "  Módulos instalados:     " -NoNewline
     Write-Host $installed -ForegroundColor Green
     
-    Write-Host "  Módulos faltando:     " -NoNewline
+    Write-Host "  Módulos faltando:       " -NoNewline
     if ($missing -gt 0) {
         Write-Host $missing -ForegroundColor Yellow
     } else {
@@ -305,11 +369,9 @@ function Show-Report {
     
     Write-Host ""
     
-    if ($missing -gt 0) {
-        Write-Info "Execute com -InstallMissing para instalar módulos faltantes"
-    }
-    if ($outdated -gt 0) {
-        Write-Info "Execute com -UpdateAll para atualizar módulos"
+    if ($missing -gt 0 -or $outdated -gt 0) {
+        Write-Info "Execute com -AutoFix para corrigir todos os problemas automaticamente"
+        Write-Info "Ou use -InstallMissing / -UpdateAll separadamente"
     }
 }
 
@@ -321,7 +383,7 @@ function Main {
     Write-Host ""
     Write-Host "╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
     Write-Host "║    PowerShell M365/Azure - Verificação de Ambiente         ║" -ForegroundColor Cyan
-    Write-Host "║                     v1.0 - 2025                            ║" -ForegroundColor Cyan
+    Write-Host "║                     v1.1 - 2025                            ║" -ForegroundColor Cyan
     Write-Host "╚════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
     
     # Info do sistema
@@ -330,16 +392,23 @@ function Main {
     # Status dos módulos
     $status = Get-ModuleStatus
     
-    # Instalar faltantes se solicitado
-    if ($InstallMissing) {
-        Install-MissingModules -ModuleStatus $status
+    # Auto Fix - corrige tudo
+    if ($AutoFix) {
+        Invoke-AutoFix -ModuleStatus $status
         $status = Get-ModuleStatus  # Refresh
     }
-    
-    # Atualizar se solicitado
-    if ($UpdateAll) {
-        Update-AllModules -ModuleStatus $status
-        $status = Get-ModuleStatus  # Refresh
+    else {
+        # Atualizar se solicitado (agora remove e reinstala)
+        if ($UpdateAll) {
+            Update-AllModules -ModuleStatus $status
+            $status = Get-ModuleStatus  # Refresh
+        }
+        
+        # Instalar faltantes se solicitado
+        if ($InstallMissing) {
+            Install-MissingModules -ModuleStatus $status
+            $status = Get-ModuleStatus  # Refresh
+        }
     }
     
     # Verificar perfil
