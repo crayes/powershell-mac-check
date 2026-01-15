@@ -21,6 +21,7 @@ Script completo para Macs que **ainda não têm PowerShell** instalado. Menu int
 - ✅ Verifica/instala Homebrew
 - ✅ Verifica/instala PowerShell
 - ✅ Verifica/instala os módulos
+- ✅ **Remove versões antigas e instala a mais recente automaticamente**
 - ✅ Configura o perfil do PowerShell
 - ✅ Limpa cache do Homebrew
 
@@ -41,16 +42,21 @@ chmod +x setup-powershell-mac.sh
 
 Script para Macs que **já têm PowerShell** instalado. Verifica e atualiza módulos.
 
+**Comportamento de atualização:** Quando encontra módulos desatualizados, o script **remove a versão antiga** e **instala a versão mais recente** automaticamente.
+
 **Como usar:**
 
 ```powershell
 # Apenas verificar status
 ./Check-PowerShellSetup.ps1
 
-# Instalar módulos faltantes
+# Corrigir TUDO automaticamente (instala faltantes + atualiza desatualizados)
+./Check-PowerShellSetup.ps1 -AutoFix
+
+# Instalar apenas módulos faltantes
 ./Check-PowerShellSetup.ps1 -InstallMissing
 
-# Atualizar todos os módulos
+# Atualizar apenas módulos desatualizados (remove antigo + instala novo)
 ./Check-PowerShellSetup.ps1 -UpdateAll
 
 # Mostrar comandos de conexão
@@ -92,6 +98,17 @@ Connect-IPPSSession -UserPrincipalName admin@seutenant.onmicrosoft.com
 - O módulo `MicrosoftTeams` precisa ser importado manualmente antes de usar. O script pode configurar isso automaticamente no perfil do PowerShell.
 - Os scripts usam `Scope CurrentUser` para não requerer privilégios de admin.
 - O script Bash pode instalar tudo do zero em um Mac limpo.
+- **Módulos desatualizados são removidos e reinstalados** para evitar conflitos de versão.
+
+## 📄 Changelog
+
+### v1.1 (Janeiro 2025)
+- Adicionado: Remoção automática de versões antigas antes de instalar nova versão
+- Adicionado: Parâmetro `-AutoFix` no script PowerShell para corrigir tudo automaticamente
+- Melhorado: Detecção de módulos desatualizados
+
+### v1.0 (Janeiro 2025)
+- Release inicial
 
 ## 📄 Licença
 
